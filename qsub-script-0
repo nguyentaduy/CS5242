@@ -1,0 +1,7 @@
+#!/bin/bash -l
+#
+#PBS -P Personal
+#PBS -m e
+#PBS -M email
+module load tensorflow/1.0+keras
+python ~/keras/Keras_test.py
