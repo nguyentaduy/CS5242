@@ -3,5 +3,6 @@
 #PBS -P Personal
 #PBS -m e
 #PBS -M email
+#PBS -l select=1:ncpus=24
 module load tensorflow/1.0+keras
 python ~/keras/Keras_test.py
