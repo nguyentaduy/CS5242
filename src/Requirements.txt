@@ -1,0 +1,4 @@
+We use the following packages:
+- Keras (2.0.2 or above)
+- nltk: need to download database
+- Tensorflow: for keras backend
