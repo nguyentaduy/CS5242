@@ -12,15 +12,25 @@ from model import *
 def predict(_model, model_weights, test_file, dictionary, out_file): #em Use exact match or not
     ids, contexts, questions = get_test_data(test_file)
     d = get_dictionary(dictionary)
-    # test_len = 500
+    # test_len = 20
     test_len = len(ids)
     paras, exact_match, qns = embeddings(d, test_len, ids, contexts, questions)
     if _model == "drqa":
         model = DrQA(model_weights)
         out = model.predict([paras,qns,exact_match])
+    elif _model == "coa_hmn":
+        model = coa_hmn(model_weights)
+        h = np.zeros((test_len,600,))
+        c = np.zeros((test_len, 600))
+        r = np.zeros((test_len,3,2*300))
+        out = model.predict([paras,qns, h, c, r])
+    elif _model == "coa_res":
+        model = coa_res(model_weights)
+        out = model.predict([paras,qns])
     else:
         model = Fusion(model_weights)
         out = model.predict([paras,qns,exact_match])
+    
     out_1 = np.argmax(out[0], axis=1)
     out_2 = np.argmax(out[1], axis=1)
 
@@ -44,6 +54,4 @@ def predict(_model, model_weights, test_file, dictionary, out_file): #em Use exa
             a = search(contexts[ids[i]], out_1[i])
             b = search(contexts[ids[i]], out_2[i])
             writer.writerow([ids[i],normalize_answer(contexts[ids[i]][a:b])])
-predict("drqa", "../drqa.h5", "../test.json", "../glove/glove.6B.300d.txt", "submission.csv")
-
-# In[ ]:
+predict("coa_res", "CoA_Res_report_2.h5", "test.json", "glove/glove.6B.300d.txt", "submission_res.csv")

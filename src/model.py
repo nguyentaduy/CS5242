@@ -13,7 +13,8 @@ from nltk.tokenize import word_tokenize
 from nltk.stem.wordnet import WordNetLemmatizer
 from keras import optimizers
 from keras import layers
-from keras.layers import Lambda, Activation,recurrent, Bidirectional, Dense, Flatten, Conv1D, Dropout, LSTM, GRU, concatenate, multiply, add, Reshape, MaxPooling1D, BatchNormalization
+from keras.layers import Lambda, Activation,recurrent, Bidirectional, Dense, Flatten, Conv1D, Dropout
+from keras.layers import LSTM, GRU, concatenate, multiply, add, Reshape, MaxPooling1D, BatchNormalization
 from keras.models import Model, load_model
 from keras import backend as K
 from keras.engine.topology import Layer
@@ -221,4 +222,249 @@ def Fusion(model_weights=None):
                   metrics=['accuracy'])
     return model
 
-# In[ ]:
+#Functions for CoA-HMN model
+def Maxout(x, num_unit=16):
+    input_shape = x.get_shape().as_list()
+   
+    ch = input_shape[-1]
+
+    x = K.reshape(x, (-1, input_shape[1], ch // num_unit, num_unit))
+    x = K.max(x, axis=3)
+    
+    return x
+
+def LSTM_D(hidden_unit, input_layer, h_state, c_state, Wi, Wf, Wc, Wo):
+
+    i = concatenate([input_layer, h_state])
+    i = Wi(i)
+    i = Activation('sigmoid')(i)
+
+    ft = Wf(i)
+    ft = Activation('sigmoid')(i)
+
+    Ct_ = Wc(i)
+    Ct_ = Activation('tanh')(i)
+
+    Ct1 = multiply([ft, c_state])
+    Ct2 = multiply([i, Ct_])
+    Ct = add([Ct1, Ct2])
+
+    ot = Wo(i)
+
+    ht = multiply([ot, Ct])
+
+    return ht, Ct
+
+def HMN(input_layer, r_layer, D1, D2, D3, DD):
+    I = layers.concatenate([input_layer, r_layer], axis = 1)
+    mt1 = D1(I)
+    mt1 = Lambda(Maxout)(mt1)
+    mt1 = Dropout(0.5)(mt1)
+    mt2 = D2(mt1)
+    mt2 = Lambda(Maxout)(mt2)
+    mt2 = Dropout(0.5)(mt2)
+    mt = layers.concatenate([mt1,mt2])
+    mt = D3(mt)
+    out = Lambda(Maxout)(mt)
+    out = Flatten()(out)
+    out = DD(out)
+    out = Activation('softmax')(out)
+    return out
+
+def coa_hmn(model_weights = None):
+    EMBED_HIDDEN_SIZE = 300
+    hidden_unit = 600
+    #shared weight layers
+    shared_LSTM = LSTM(EMBED_HIDDEN_SIZE, return_sequences=True)
+    shared_start = Dense(max_para, activation='softmax')
+    shared_end = Dense(max_para, activation='softmax')
+    Wi = Dense(hidden_unit)
+    Wf = Dense(hidden_unit)
+    Wc = Dense(hidden_unit)
+    Wo = Dense(hidden_unit)
+    D1a = Dense(640)
+    D2a = Dense(640)
+    D3a = Dense(16)
+    DDa = Dense(max_para)
+    D1b = Dense(640)
+    D2b = Dense(640)
+    D3b = Dense(16)
+    DDb = Dense(max_para)
+    Dr = Dense(2*EMBED_HIDDEN_SIZE)
+    ###########################
+    sentence = layers.Input(shape=(max_para,dimension), dtype='float32')
+    encoded_sentence =shared_LSTM(sentence)
+
+    question = layers.Input(shape=(max_q,dimension), dtype='float32')
+    encoded_question = shared_LSTM(question)
+
+    #Encoder
+    merge_1 = layers.dot([encoded_sentence, encoded_question], axes = 2 )
+    A_Q = layers.Activation("softmax")(merge_1)
+    merge_2 = layers.dot([encoded_question, encoded_sentence], axes = 2 )
+    A_D = layers.Activation("softmax")(merge_2)
+    C_Q = layers.dot([A_Q, encoded_sentence], axes = 1 )
+
+    C_Q = layers.concatenate([encoded_question, C_Q], axis=2)
+    C_D = layers.dot([A_D, C_Q], axes=1)
+    C_ = layers.concatenate([encoded_sentence, C_D], axis=2)
+
+    U = Bidirectional(LSTM(EMBED_HIDDEN_SIZE, return_sequences=True))(C_)
+    U = Dropout(0.5)(U)
+
+    #Decoder
+    h_state_i = layers.Input(shape=(hidden_unit,))
+    h_state = Dense(hidden_unit, kernel_initializer = keras.initializers.Zeros())(h_state_i)
+
+    C_state_i = layers.Input(shape=(hidden_unit,))
+    C_state = Dense(hidden_unit, kernel_initializer = keras.initializers.Zeros())(C_state_i)
+
+    r_layer_init = layers.Input(shape=(3,2*EMBED_HIDDEN_SIZE))
+    r_layer = Dense(2*EMBED_HIDDEN_SIZE, kernel_initializer = keras.initializers.Zeros())(r_layer_init)
+
+    start = HMN(U, r_layer, D1a, D2a, D3a, DDa)
+    end = HMN(U, r_layer, D1b, D2b, D3b, DDb)
+
+    #########################
+    for i in range(5):
+        start_comb = Reshape((max_para,1))(start)
+        end_comb = Reshape((max_para,1))(end)
+        combine_output = concatenate([start_comb,end_comb], axis = 2)
+        LSTM_input_U = layers.dot([combine_output, U], axes = 1)
+        LSTM_input = Reshape((2*600,))(LSTM_input_U)
+
+        h_state, C_state = LSTM_D(hidden_unit, LSTM_input, h_state, C_state, Wi, Wf, Wc, Wo)
+        h_reshape = Reshape((1,600))(h_state)
+        r_layer = concatenate([LSTM_input_U, h_reshape], axis = 1)
+        r_layer = Dr(r_layer)
+        r_layer = Activation('tanh')(r_layer)
+
+        start = HMN(U, r_layer, D1a, D2a, D3a, DDa)
+        end = HMN(U, r_layer, D1b, D2b, D3b, DDb)
+        
+    model = Model([sentence, question, h_state_i, C_state_i, r_layer_init],[start, end])
+    if model_weights != None:
+        model.load_weights(model_weights)
+    optimizer = optimizers.Adam(lr=0.001)
+    model.compile(optimizer=optimizer,
+                  loss='categorical_crossentropy',
+                  metrics=['accuracy'])
+    return model
+
+#Functions for CoA-Res
+#Convolution, batch norm, relu unit
+def convBN_pool(input_layer, conv_channels):
+    convlayer = Conv1D(conv_channels, 1, padding = 'valid', strides = 2)(input_layer)
+    BN = BatchNormalization(axis=-1, momentum = 0.99, epsilon=0.001, center=True, scale = True, 
+                            beta_initializer='zeros', gamma_initializer='ones', moving_mean_initializer='zeros')(convlayer)
+    activation = layers.PReLU()(BN)
+
+    return activation
+
+def convBN(input_layer, conv_channels):
+    convlayer = Conv1D(conv_channels, 3, padding = 'same')(input_layer)
+    BN = BatchNormalization(axis=-1, momentum = 0.99, epsilon=0.001, center=True, scale = True, 
+                            beta_initializer='zeros', gamma_initializer='ones', moving_mean_initializer='zeros', moving_variance_initializer='ones', 
+                            beta_regularizer=None, gamma_regularizer=None, beta_constraint=None, gamma_constraint=None)(convlayer)
+    activation = layers.PReLU()(BN)
+
+    return activation
+
+def RU(input_layer, conv_channels, d_rate):
+    # input tensor for a 3-channel 256x256 image
+    x = input_layer
+    # 3x3 conv with 3 output channels (same as input channels)
+    y = Conv1D(conv_channels, 3, padding='same', dilation_rate = d_rate)(x)
+    y = Conv1D(conv_channels, 3, padding='same', dilation_rate = d_rate)(y)
+    # this returns x + y.
+    z = layers.add([x, y])
+    return z
+
+def coa_res(model_weights = None):
+    EMBED_HIDDEN_SIZE = 300
+    #shared weight layers
+    shared_LSTM = LSTM(EMBED_HIDDEN_SIZE, return_sequences=True)
+
+    ###########################
+    sentence = layers.Input(shape=(max_para,dimension), dtype='float32')
+    encoded_sentence =shared_LSTM(sentence)
+
+    question = layers.Input(shape=(max_q,dimension), dtype='float32')
+    encoded_question = shared_LSTM(question)
+
+    #Encoder
+    merge_1 = layers.dot([encoded_sentence, encoded_question], axes = 2 )
+    A_Q = layers.Activation("softmax")(merge_1)
+    merge_2 = layers.dot([encoded_question, encoded_sentence], axes = 2 )
+    A_D = layers.Activation("softmax")(merge_2)
+    C_Q = layers.dot([A_Q, encoded_sentence], axes = 1 )
+
+    C_Q = layers.concatenate([encoded_question, C_Q], axis=2)
+    C_D = layers.dot([A_D, C_Q], axes=1)
+    C_ = layers.concatenate([encoded_sentence, C_D], axis=2)
+
+    U = Bidirectional(LSTM(EMBED_HIDDEN_SIZE, return_sequences=True))(C_)
+    U = Dropout(0.5)(U)
+
+    #Decoder
+    start = convBN(U, 100)
+    start = RU(start, 100, 1)
+    start = Dropout(0.5)(start)
+    start = convBN_pool(start, 64)
+    start = RU(start, 64, 1)
+    start = convBN_pool(start, 64)
+    start = RU(start, 64, 2)
+    start = convBN_pool(start, 128)
+    start = RU(start, 128, 1)
+    start =layers.PReLU()(start)
+    start = RU(start, 128, 2)
+    start = Dropout(0.5)(start)
+    start = convBN_pool(start, 256)
+    start = RU(start, 256, 2)
+    start = Dropout(0.5)(start)
+    start = convBN_pool(start, 128)
+    start = RU(start, 128, 1)
+    start = layers.PReLU()(start)
+    start = Dropout(0.5)(start)
+    start = convBN(start, 64)
+    start = RU(start, 64, 1)
+    start = layers.PReLU()(start)
+    start = Flatten()(start)
+    start = Dropout(0.5)(start)
+    start = Dense(max_para, activation='softmax', name='output_1')(start)
+
+
+    end = GRU(100, return_sequences=True)(U)
+    end = convBN(end, 100)
+    end = RU(end, 100, 1)
+    end = Dropout(0.5)(end)
+    end = convBN_pool(end, 64)
+    end = RU(end, 64, 1)
+    end = convBN_pool(end, 64)
+    end = RU(end, 64, 2)
+    end = convBN_pool(end, 128)
+    end = RU(end, 128, 1)
+    end = layers.PReLU()(end)
+    end = RU(end, 128, 2)
+    end = Dropout(0.5)(end)
+    end = convBN_pool(end, 256)
+    end = RU(end, 256, 2)
+    end = Dropout(0.5)(end)
+    end = convBN_pool(end, 128)
+    end = RU(end, 128, 1)
+    end = layers.PReLU()(end)
+    end = Dropout(0.5)(end)
+    end = convBN(end, 64)
+    end = RU(end, 64, 1)
+    end = layers.PReLU()(end)
+    end = Flatten()(end)
+    end = Dropout(0.5)(end)
+    end = Dense(max_para, activation='softmax', name='output_2')(end)
+
+    model = Model([sentence, question],[start, end])
+    if model_weights != None:
+        model.load_weights(model_weights)
+    model.compile(optimizer='adam',
+                  loss={'output_1': 'categorical_crossentropy', 'output_2': 'categorical_crossentropy'},
+                  metrics=['accuracy'])
+    return model
