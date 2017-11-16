@@ -1,4 +1,3 @@
-
 from __future__ import print_function
 import json
 from pprint import pprint
@@ -28,6 +27,7 @@ dimension = 300
 
 def get_dictionary(vocab):
     d = dict()
+    #Add encoding ='utf=8' if get DecodeError
     with open(vocab) as f:
         lines = f.readlines()
         for l in lines:

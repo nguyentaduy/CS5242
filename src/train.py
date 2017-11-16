@@ -33,4 +33,11 @@ def train(_model, train_file, dictionary, model_weights, model_weights_save, bat
                   batch_size=batch_size, epochs=epoch, validation_split=0.1)
 
     model.save(model_weights_save)
-train("coa_res", "train.json", "glove/glove.6B.300d.txt","CoA_Res_report_2.h5","coa_res.h5",10,1)
+
+#Change this line to train your desired model
+#coa_hmn: Coattention with highway maxout network
+#coa_res: Coattention with convolutional residual network
+#drqa : DrQA, document reader
+#fusion: FusionNet
+if __name__ == "__main__":
+    train("coa_res", "train.json", "glove/glove.6B.300d.txt","CoA_Res_report_2.h5","coa_res.h5",10,1)

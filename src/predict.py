@@ -54,4 +54,11 @@ def predict(_model, model_weights, test_file, dictionary, out_file): #em Use exa
             a = search(contexts[ids[i]], out_1[i])
             b = search(contexts[ids[i]], out_2[i])
             writer.writerow([ids[i],normalize_answer(contexts[ids[i]][a:b])])
-predict("coa_res", "CoA_Res_report_2.h5", "test.json", "glove/glove.6B.300d.txt", "submission_res.csv")
+
+#Change this line to predict with your desired model
+#coa_hmn: Coattention with highway maxout network
+#coa_res: Coattention with convolutional residual network
+#drqa : DrQA, document reader
+#fusion: FusionNet
+if __name__ == "__main__":
+    predict("coa_res", "CoA_Res_report_2.h5", "test.json", "glove/glove.6B.300d.txt", "submission_res.csv")
